@@ -122,6 +122,7 @@
   </ItemGroup>
   <ItemGroup>
     <Compile Include="AppInsights\AppInsights.cs" />
+    <Compile Include="DTO\InternalStore.cs" />
     <Compile Include="DTO\XtbPlugin.cs" />
     <Compile Include="Extensions.cs" />
     <Compile Include="IStore.cs" />
