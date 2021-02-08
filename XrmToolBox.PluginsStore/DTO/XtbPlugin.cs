@@ -96,6 +96,8 @@ namespace XrmToolBox.PluginsStore.DTO
         [DataMember(Name = "view-id")]
         public string ViewId { get; set; }
 
+        public string NuGetSource { get; set; }
+
         public ListViewItem GetPluginsStoreItem()
         {
             var packageVersion = new Version(Version);

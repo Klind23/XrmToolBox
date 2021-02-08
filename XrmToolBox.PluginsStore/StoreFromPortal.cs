@@ -11,6 +11,7 @@ using System.Reflection;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
 using System.Windows.Forms;
+using System.Xml;
 using XrmToolBox.Extensibility;
 using XrmToolBox.PluginsStore.DTO;
 
@@ -22,9 +23,11 @@ namespace XrmToolBox.PluginsStore
         public static readonly Version MinCompatibleVersion = new Version(1, 2015, 12, 20);
 
         private readonly string applicationPluginsFolder;
+        private readonly string applicationSettingsFolder;
         private readonly string nugetPluginsFolder;
         private Dictionary<string, int> currentVersionDownloadsCount;
-        private PackageManager manager;
+        private PackageManager managerNuGet;
+        private Dictionary<string, PackageManager> internalManagers;
         private FileInfo[] plugins;
 
         public StoreFromPortal(bool allowConnectionControlsPreReleaseSearch)
@@ -40,7 +43,27 @@ namespace XrmToolBox.PluginsStore
 
             // Repository initialization
             var repository = PackageRepositoryFactory.Default.CreateRepository("https://packages.nuget.org/api/v2");
-            manager = new PackageManager(repository, nugetPluginsFolder);
+            managerNuGet = new PackageManager(repository, nugetPluginsFolder);
+
+            // Internal repositories
+            internalManagers = new Dictionary<string, PackageManager>();
+            applicationSettingsFolder = Paths.SettingsPath;
+            var internalPluginsConfig = Path.Combine(applicationSettingsFolder, "XrmToolBox.InternalPlugins.json");
+            var internalStores = GetInternalStores(internalPluginsConfig);
+            foreach (var item in internalStores.Stores)
+            {
+                try
+                {
+                    repository = PackageRepositoryFactory.Default.CreateRepository(item.NuGetFeed);
+                    internalManagers.Add(item.NuGetFeed, new PackageManager(repository, nugetPluginsFolder));
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        $"All I know Is: {ex.Message}",
+                        "Error loading internal store", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+                }
+            }
         }
 
         public event EventHandler PluginsUpdated;
@@ -114,7 +137,7 @@ namespace XrmToolBox.PluginsStore
         public bool IsConnectionControlsUpdateAvailable(out string version, out string releasenotes, string currentStoredVersion)
         {
             var ca = typeof(McTools.Xrm.Connection.ConnectionDetail).Assembly;
-            var nugetPlugin = manager.SourceRepository.FindPackage("MscrmTools.Xrm.Connection", new VersionSpec(), AllowConnectionControlPreRelease, false);
+            var nugetPlugin = managerNuGet.SourceRepository.FindPackage("MscrmTools.Xrm.Connection", new VersionSpec(), AllowConnectionControlPreRelease, false);
 
             releasenotes = nugetPlugin.ReleaseNotes;
             version = nugetPlugin.Version.Version + (!string.IsNullOrEmpty(nugetPlugin.Version.SpecialVersion) ? "-" + nugetPlugin.Version.SpecialVersion : "");
@@ -122,8 +145,8 @@ namespace XrmToolBox.PluginsStore
             var currStoredVer = (currentStoredVersion != null) ? new Version(currentStoredVersion.Split('-')[0]) : null;
 
             return ca.GetName().Version < nugetPlugin.Version.Version
-                   || ca.GetName().Version == nugetPlugin.Version.Version && 
-                   new Version(version.Split('-')[0]) == currStoredVer && 
+                   || ca.GetName().Version == nugetPlugin.Version.Version &&
+                   new Version(version.Split('-')[0]) == currStoredVer &&
                    version != currentStoredVersion;
         }
 
@@ -131,6 +154,17 @@ namespace XrmToolBox.PluginsStore
         {
             plugins = new DirectoryInfo(applicationPluginsFolder).GetFiles();
             XrmToolBoxPlugins = new XtbPlugins();
+
+            var internalStores = GetInternalStores(Path.Combine(applicationSettingsFolder, "XrmToolBox.InternalPlugins.json"));
+            foreach (var internalStore in internalStores.Stores)
+            {
+                foreach (var plugin in internalStore.Plugins)
+                {
+                    plugin.NuGetSource = internalStore.NuGetFeed;
+                }
+                XrmToolBoxPlugins.Plugins.AddRange(internalStore.Plugins);
+            }
+
             string url = "https://www.xrmtoolbox.com/_odata/plugins";
             do
             {
@@ -224,8 +258,8 @@ namespace XrmToolBox.PluginsStore
 
         public bool PrepareConnectionControlsUpdate(Control parentControl, bool installOnNextRestart, out string version)
         {
-            var nugetPlugin = manager.SourceRepository.FindPackage("MscrmTools.Xrm.Connection", new VersionSpec(), AllowConnectionControlPreRelease, false);
-            manager.InstallPackage(nugetPlugin, true, false);
+            var nugetPlugin = managerNuGet.SourceRepository.FindPackage("MscrmTools.Xrm.Connection", new VersionSpec(), AllowConnectionControlPreRelease, false);
+            managerNuGet.InstallPackage(nugetPlugin, true, false);
 
             var packageFolder = Path.Combine(nugetPluginsFolder, $"{nugetPlugin.Id}.{nugetPlugin.Version}");
 
@@ -271,6 +305,12 @@ namespace XrmToolBox.PluginsStore
             {
                 i++;
                 worker?.ReportProgress(i * 100 / pluginsToInstall.Count, plugin.Name);
+
+                PackageManager manager;
+                if(string.IsNullOrEmpty(plugin.NuGetSource) || !internalManagers.TryGetValue(plugin.NuGetSource, out manager))
+                {
+                    manager = managerNuGet;
+                }
 
                 var nugetPlugin =
                     manager.SourceRepository.FindPackage(plugin.NugetId, new SemanticVersion(plugin.Version), false, false);
@@ -483,14 +523,7 @@ namespace XrmToolBox.PluginsStore
                 {
                     if (dataStream != null)
                     {
-                        var serializer = new DataContractJsonSerializer(typeof(T),
-                            new DataContractJsonSerializerSettings
-                            {
-                                UseSimpleDictionaryFormat = true,
-                                DateTimeFormat = new DateTimeFormat("yyyy-MM-dd'T'HH:mm:ss", new DateTimeFormatInfo { FullDateTimePattern = "yyyy-MM-dd'T'HH:mm:ss" })
-                            });
-
-                        return (T)serializer.ReadObject(dataStream);
+                        return ReadObjectFromStream<T>(dataStream);
                     }
                 }
             }
@@ -505,6 +538,18 @@ namespace XrmToolBox.PluginsStore
                 }
             }
             return new T();
+        }
+
+        private T ReadObjectFromStream<T>(Stream dataStream)
+        {
+            var serializer = new DataContractJsonSerializer(typeof(T),
+                         new DataContractJsonSerializerSettings
+                         {
+                             UseSimpleDictionaryFormat = true,
+                             DateTimeFormat = new DateTimeFormat("yyyy-MM-dd'T'HH:mm:ss", new DateTimeFormatInfo { FullDateTimePattern = "yyyy-MM-dd'T'HH:mm:ss" })
+                         });
+
+            return (T)serializer.ReadObject(dataStream);
         }
 
         private long GetDirectorySize(string path)
@@ -543,6 +588,27 @@ namespace XrmToolBox.PluginsStore
             }
 
             return CompatibleState.Other;
+        }
+
+        private InternalStores GetInternalStores(string internalPluginsConfig)
+        {
+            if (File.Exists(internalPluginsConfig))
+            {
+                try
+                {
+                    using (Stream dataStream = File.OpenRead(internalPluginsConfig))
+                    {
+                        return ReadObjectFromStream<InternalStores>(dataStream);
+                    }
+                }
+                catch (Exception error)
+                {
+                    MessageBox.Show(
+                             $"The following error occurred: {error.Message}",
+                             "Error loading internal plugins", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            return new InternalStores();
         }
     }
 }

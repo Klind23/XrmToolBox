@@ -17,6 +17,6 @@ namespace XrmToolBox.PluginsStore.DTO
     public class InternalStores
     {
         [DataMember(Name = "internal_stores")]
-        List<InternalStore> Stores { get; set; } = new List<InternalStore>();
+        public List<InternalStore> Stores { get; set; } = new List<InternalStore>();
     }
 }
