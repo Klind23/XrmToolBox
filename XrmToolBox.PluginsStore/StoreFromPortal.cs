@@ -1,4 +1,5 @@
-﻿using NuGet;
+﻿using AdysTech.CredentialManager;
+using NuGet;
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
@@ -48,22 +49,7 @@ namespace XrmToolBox.PluginsStore
             // Internal repositories
             internalManagers = new Dictionary<string, PackageManager>();
             applicationSettingsFolder = Paths.SettingsPath;
-            var internalPluginsConfig = Path.Combine(applicationSettingsFolder, "XrmToolBox.InternalPlugins.json");
-            var internalStores = GetInternalStores(internalPluginsConfig);
-            foreach (var item in internalStores.Stores)
-            {
-                try
-                {
-                    repository = PackageRepositoryFactory.Default.CreateRepository(item.NuGetFeed);
-                    internalManagers.Add(item.NuGetFeed, new PackageManager(repository, nugetPluginsFolder));
-                }
-                catch (Exception ex)
-                {
-                    MessageBox.Show(
-                        $"All I know Is: {ex.Message}",
-                        "Error loading internal store", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
-                }
-            }
+            GetInternalStores(Path.Combine(applicationSettingsFolder, "XrmToolBox.InternalPlugins.json"), setupRepositories: true);
         }
 
         public event EventHandler PluginsUpdated;
@@ -158,10 +144,6 @@ namespace XrmToolBox.PluginsStore
             var internalStores = GetInternalStores(Path.Combine(applicationSettingsFolder, "XrmToolBox.InternalPlugins.json"));
             foreach (var internalStore in internalStores.Stores)
             {
-                foreach (var plugin in internalStore.Plugins)
-                {
-                    plugin.NuGetSource = internalStore.NuGetFeed;
-                }
                 XrmToolBoxPlugins.Plugins.AddRange(internalStore.Plugins);
             }
 
@@ -307,7 +289,7 @@ namespace XrmToolBox.PluginsStore
                 worker?.ReportProgress(i * 100 / pluginsToInstall.Count, plugin.Name);
 
                 PackageManager manager;
-                if(string.IsNullOrEmpty(plugin.NuGetSource) || !internalManagers.TryGetValue(plugin.NuGetSource, out manager))
+                if (string.IsNullOrEmpty(plugin.NuGetSource) || !internalManagers.TryGetValue(plugin.NuGetSource, out manager))
                 {
                     manager = managerNuGet;
                 }
@@ -590,15 +572,16 @@ namespace XrmToolBox.PluginsStore
             return CompatibleState.Other;
         }
 
-        private InternalStores GetInternalStores(string internalPluginsConfig)
+        private InternalStores GetInternalStores(string internalPluginsConfig, bool setupRepositories = false)
         {
+            InternalStores internalStores = null;
             if (File.Exists(internalPluginsConfig))
             {
                 try
                 {
                     using (Stream dataStream = File.OpenRead(internalPluginsConfig))
                     {
-                        return ReadObjectFromStream<InternalStores>(dataStream);
+                        internalStores = ReadObjectFromStream<InternalStores>(dataStream);
                     }
                 }
                 catch (Exception error)
@@ -606,9 +589,72 @@ namespace XrmToolBox.PluginsStore
                     MessageBox.Show(
                              $"The following error occurred: {error.Message}",
                              "Error loading internal plugins", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return new InternalStores();
                 }
             }
-            return new InternalStores();
+
+            foreach (var item in internalStores.Stores)
+            {
+                try
+                {
+                    PackageManager manager;
+                    if (setupRepositories)
+                    {
+                        var repository = PackageRepositoryFactory.Default.CreateRepository(item.NuGetFeed);
+                        if (item.NuGetAuthentication == "Password")
+                        {
+                            var credentialTarget = $"XrmToolBox:Id={item.NuGetSecretId}";
+                            var credentials = CredentialManager.GetCredentials(credentialTarget);
+                            if (credentials == null)
+                            {
+                                bool save = true;
+                                credentials = CredentialManager.PromptForCredentials(credentialTarget, ref save, $"NuGet Feed: {item.NuGetFeed}", "Enter Credentials");
+                                if (save)
+                                {
+                                    CredentialManager.SaveCredentials(credentialTarget, credentials);
+                                }
+                            }
+                            CredentialStore.Instance.Add(new Uri(item.NuGetFeed), credentials);
+                        }
+                        manager = new PackageManager(repository, nugetPluginsFolder);
+                        internalManagers.Add(item.NuGetFeed, manager);
+                    }
+                    else
+                    {
+                        if (!internalManagers.TryGetValue(item.NuGetFeed, out manager))
+                        {
+                            MessageBox.Show(
+                             $"Could not find PackageManager for {item.NuGetFeed}",
+                             "Error loading internal store", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+                            continue;
+                        }
+
+                        foreach (var plugin in item.Plugins)
+                        {
+                            plugin.NuGetSource = item.NuGetFeed;
+                            var package = manager.SourceRepository.FindPackage(plugin.NugetId);
+                            plugin.LatestReleaseDate = package.Published?.DateTime;
+                            plugin.Authors = string.Join(";", package.Authors);
+                            plugin.AverageDownloadCount = (decimal)manager.SourceRepository.FindPackagesById(plugin.NugetId).Where(p => p.IsReleaseVersion()).Average(p => p.DownloadCount);
+                            plugin.Description = package.Description;
+                            plugin.Files.AddRange(package.GetLibFiles().Select(f => f.Path));
+                            plugin.FirstReleaseDate = manager.SourceRepository.FindPackagesById(plugin.NugetId).Where(p => p.IsReleaseVersion()).Min(p => p.Published)?.DateTime;
+                            plugin.LogoUrl = package.IconUrl?.ToString();
+                            plugin.Name = package.Title;
+                            plugin.ProjectUrl = package.ProjectUrl?.ToString();
+                            plugin.RequireLicenseAcceptance = package.RequireLicenseAcceptance;
+                            plugin.Version = package.Version.ToString();
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        $"All I know Is: {ex.Message}",
+                        "Error loading internal store", MessageBoxButtons.OK, MessageBoxIcon.Exclamation);
+                }
+            }
+            return internalStores;
         }
     }
 }

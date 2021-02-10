@@ -9,6 +9,12 @@ namespace XrmToolBox.PluginsStore.DTO
         [DataMember(Name = "nuget_feed")]
         public string NuGetFeed { get; set; }
 
+        [DataMember(Name = "nuget_authentication")]
+        public string NuGetAuthentication { get; set; }
+
+        [DataMember(Name = "nuget_secretid")]
+        public string NuGetSecretId { get; set; }
+
         [DataMember(Name = "plugins")]
         public List<XtbPlugin> Plugins { get; set; } = new List<XtbPlugin>();
     }
