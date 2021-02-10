@@ -11,6 +11,7 @@ using System.Net;
 using System.Reflection;
 using System.Runtime.Serialization;
 using System.Runtime.Serialization.Json;
+using System.Runtime.Versioning;
 using System.Windows.Forms;
 using System.Xml;
 using XrmToolBox.Extensibility;
@@ -637,13 +638,14 @@ namespace XrmToolBox.PluginsStore
                             plugin.Authors = string.Join(";", package.Authors);
                             plugin.AverageDownloadCount = (decimal)manager.SourceRepository.FindPackagesById(plugin.NugetId).Where(p => p.IsReleaseVersion()).Average(p => p.DownloadCount);
                             plugin.Description = package.Description;
-                            plugin.Files.AddRange(package.GetLibFiles().Select(f => f.Path));
+                            plugin.FilesList = string.Join(Environment.NewLine, package.GetLibFiles().Select(f => f.Path));
                             plugin.FirstReleaseDate = manager.SourceRepository.FindPackagesById(plugin.NugetId).Where(p => p.IsReleaseVersion()).Min(p => p.Published)?.DateTime;
                             plugin.LogoUrl = package.IconUrl?.ToString();
+                            plugin.MinimalXrmToolBoxVersion = package.FindDependency("XrmToolBox", new FrameworkName(".NET Framework, Version=4.0")).VersionSpec.MinVersion.ToString();
                             plugin.Name = package.Title;
                             plugin.ProjectUrl = package.ProjectUrl?.ToString();
                             plugin.RequireLicenseAcceptance = package.RequireLicenseAcceptance;
-                            plugin.Version = package.Version.ToString();
+                            plugin.Version = package.Version.ToString();                         
                         }
                     }
                 }
